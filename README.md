@@ -6,4 +6,4 @@
 
 ## Poster
 
-![poster](https://github.com/DavidSiegl/Emotion-Analysis-Project/blob/main/Poster%20-%20Group%201.png)
+![poster](https://github.com/klementf95/Emotional-Analysis-Project/blob/main/Poster%20-%20Group%201.png)
