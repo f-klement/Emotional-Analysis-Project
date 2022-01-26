@@ -1,0 +1,1086 @@
+---
+title: "Emotional Attributes of diverging political spheres on Twitter"
+author: "Florian Klement, David Siegl, Shirin Yanni"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+
+# Libraries
+```{r}
+library(rtweet)
+library(tidyverse)
+library(gsubfn)
+library(quanteda)
+library(quanteda.textplots)
+library(arules)
+library(lubridate)
+library(patchwork)
+library(ggrepel)
+library(caret)
+library(mgcv)
+library(dplyr)
+```
+
+
+# Accessing the Twitter-API
+```{r}
+consumerKey = "X"
+consumerSecret = "X"
+accessToken = "X-X"
+accessSecret = "X"
+options(httr_oauth_cache=TRUE)
+twitter_token <- create_token(
+  consumer_key = consumerKey,
+  consumer_secret = consumerSecret,
+  access_token = accessToken,
+  access_secret = accessSecret)
+```
+
+
+## Loading some data
+```{r}
+sheet <- read.csv("./Emotion Analysis - Twitter.csv")
+id_list <- as.list(sheet$Twitter.ID)
+```
+
+
+## Defining Function for Twitter-Scraping
+```{r}
+scrape_tweets <- function(userID, n_tweets, filename){
+  tweets <- get_timeline(userID, n_tweets, include_rts=FALSE, exclude_replies=TRUE)
+  tweets_df <- as_data_frame(tweets)
+  tweets_df <- tweets_df %>%
+    select(c(status_id, text, screen_name, created_at, favorite_count, retweet_count))
+  write.csv(tweets_df, paste(filename,"-tweets.csv", sep = ""), row.names = FALSE)
+}
+
+# for (id in id_list) {
+#   scrape_tweets(id, 3200, id)
+# }
+```
+
+
+## Loading the Tweets
+```{r}
+tweets_files <- list.files("./data/raw")
+
+for (i in 1:length(tweets_files)) {                              
+  assign(paste0("tweets_", i),                                   
+         read.csv(paste0("./data/raw/",
+                   tweets_files[i])))
+}
+```
+
+
+# Preprocessing
+```{r}
+tweets_1 <- top_n(tweets_1, 300, created_at) #sampling the tweets for n=300
+tweets_2 <- top_n(tweets_2, 300, created_at)
+tweets_4 <- top_n(tweets_4, 300, created_at)
+tweets_5 <- top_n(tweets_5, 300, created_at)
+tweets_6 <- top_n(tweets_6, 300, created_at)
+tweets_7 <- top_n(tweets_7, 300, created_at)
+tweets_8 <- top_n(tweets_8, 300, created_at)
+tweets_9 <- top_n(tweets_9, 300, created_at)
+tweets_10 <- top_n(tweets_10, 300, created_at)
+tweets_11 <- top_n(tweets_11, 300, created_at)
+tweets_12 <- top_n(tweets_12, 300, created_at)
+tweets_13 <- top_n(tweets_13, 300, created_at)
+tweets_14 <- top_n(tweets_14, 300, created_at)
+tweets_15 <- top_n(tweets_15, 300, created_at)
+tweets_16 <- top_n(tweets_16, 300, created_at)
+```
+
+
+```{r}
+cleaning_tweets <- function(text){
+  text <- gsub("http.+", "", text)
+  text <- gsub(",", "", text)
+  text <- gsubfn(pattern = "[[:punct:]]", engine = "R",
+       replacement = function(x) ifelse(x == "#", "#", ""), 
+       text)
+  text <- gsub("[[:digit:]]", "", text)
+  text <- gsub("  ", " ", text)
+  text <- tolower(text)
+}
+```
+
+
+```{r}
+df_full <- rbind(tweets_1, tweets_2, tweets_3, tweets_4, tweets_5, tweets_6, tweets_7, tweets_8, tweets_9, tweets_10, tweets_11, tweets_12, tweets_13, tweets_14, tweets_15, tweets_16, by = (c("status_id", "text", "screen_name", "created_at", "favorite_count", "retweet_count")), all = TRUE)
+
+unique(df_full$screen_name)
+
+df_full <- df_full %>%
+  filter(screen_name != TRUE) %>%
+  filter(screen_name != "screen_name")
+ 
+unique(df_full$screen_name)
+
+df_full <- df_full %>%
+  rowwise() %>%
+  mutate(text_clean = cleaning_tweets(text)) %>%
+  mutate(date = as.Date(created_at))
+
+write.csv(df_full, "./data/clean/tweets_clean.csv", row.names = FALSE)
+```
+
+
+```{r}
+tweets_clean <- read.csv("./data/clean/tweets_clean.csv")
+
+join_info <- sheet %>%
+  mutate(screen_name = gsub("@", "", Twitter.ID))
+
+tweets_clean_joined <- left_join(tweets_clean, join_info, by = "screen_name")
+tweets_clean_joined <- tweets_clean_joined %>%
+  select(-c(Link, Follower, Notes, Twitter.ID))
+tweets_clean_joined <- rename(tweets_clean_joined, name = Name, party = Party, country = Country, left_right = left.right)
+
+write.csv(tweets_clean_joined, "./data/clean/tweets_clean_joined.csv", row.names = FALSE)
+```
+
+
+# Joining the emotion dictionary
+```{r}
+tweets_clean_joined <- read.csv("./data/clean/tweets_clean_joined.csv")
+
+stopwords_de <- stopwords("german")
+stopwords_add <- c("dass", "„", "–")
+stopwords_de <- append(stopwords_de, stopwords_add)
+
+dict <- read_tsv("./dict/de.tsv")
+dict$word <- tolower(dict$word)
+```
+
+
+```{r}
+tweets_words <- function(text){
+  words <- strsplit(text, " ")[[1]]
+  tf <- table(words)           
+  tf <- as.data.frame(tf)
+  colnames(tf) <- c("word", "frequency")
+  tf <- subset(tf, is.element(word, stopwords_de) == FALSE)
+  return(tf)
+}
+```
+
+
+```{r}
+join_dict_valence <- function(words, dict){
+  tf <- tweets_words(text)
+  combined <- merge(tf, dict, by="word")
+  score_valence <- sum(combined$frequency * combined$valence) / sum(combined$frequency)
+  return(score_valence)
+}
+
+join_dict_arousal <- function(words, dict){
+  tf <- tweets_words(text)
+  combined <- merge(tf, dict, by="word")
+  score_arousal <- sum(combined$frequency * combined$arousal) / sum(combined$frequency)
+  return(score_arousal)
+}
+
+join_dict_dominance <- function(words, dict){
+  tf <- tweets_words(text)
+  combined <- merge(tf, dict, by="word")
+  score_dominance <- sum(combined$frequency * combined$dominance) / sum(combined$frequency)
+  return(score_dominance)
+}
+```
+
+
+## Getting valence, arousal and dominance score for all users
+```{r}
+# texts <- paste(tweets_clean_joined$text_clean, tweets_clean_joined$text_clean, sep = " ")
+# valence_scores <- c()
+# arousal_scores <- c()
+# dominance_scores <- c()
+# 
+# for(i in 1:nrow(tweets_clean_joined)){
+#     text <- texts[i]
+#     scores <- join_dict_valence(text, dict)
+#     valence_scores <- c(valence_scores, scores)
+# }
+```
+
+
+```{r}
+# for(i in 1:nrow(tweets_clean_joined)){
+#     text <- texts[i]
+#     scores <- join_dict_arousal(text, dict)
+#     arousal_scores <- c(arousal_scores, scores)
+# }
+```
+
+
+```{r}
+# for(i in 1:nrow(tweets_clean_joined)){
+#     text <- texts[i]
+#     scores <- join_dict_dominance(df, dict)
+#     dominance_scores <- c(dominance_scores, scores)
+# }
+```
+
+
+```{r}
+# tweets_clean_joined_emo <- cbind(tweets_clean_joined, valence_scores, arousal_scores, dominance_scores)
+# tweets_clean_joined_emo <- rename(tweets_clean_joined_emo, valence = valence_scores, arousal = arousal_scores, dominance = dominance_scores)
+# write.csv(tweets_clean_joined_emo, "./data/clean/tweets_clean_joined_emo.csv", row.names = FALSE)
+```
+
+
+## Also getting scores for anger and fear
+```{r}
+join_dict_anger <- function(words, dict){
+  tf <- tweets_words(text)
+  combined <- merge(tf, dict, by="word")
+  score_anger <- sum(combined$frequency * combined$anger) / sum(combined$frequency)
+  return(score_anger)
+}
+
+join_dict_fear <- function(words, dict){
+  tf <- tweets_words(text)
+  combined <- merge(tf, dict, by="word")
+  score_fear <- sum(combined$frequency * combined$fear) / sum(combined$frequency)
+  return(score_fear)
+}
+
+texts <- paste(tweets_clean_joined$text_clean, tweets_clean_joined$text_clean, sep = " ")
+anger_scores <- c()
+fear_scores <- c()
+```
+
+
+```{r}
+# for(i in 1:nrow(tweets_clean_joined)){
+#     text <- texts[i]
+#     scores <- join_dict_anger(df, dict)
+#     anger_scores <- c(anger_scores, scores)
+# }
+```
+
+
+```{r}
+# for(i in 1:nrow(tweets_clean_joined)){
+#     text <- texts[i]
+#     scores <- join_dict_fear(df, dict)
+#     fear_scores <- c(fear_scores, scores)
+# }
+```
+
+
+```{r}
+# tweets_clean_joined_emo <- read.csv("./data/clean/tweets_clean_joined_emo.csv")
+# tweets_clean_joined_emo <- cbind(tweets_clean_joined_emo, anger_scores, fear_scores)
+# tweets_clean_joined_emo <- rename(tweets_clean_joined_emo, anger = anger_scores, fear = fear_scores)
+# write.csv(tweets_clean_joined_emo, "./data/clean/tweets_clean_joined_emo.csv", row.names = FALSE)
+```
+
+
+# Some scatter plots
+```{r}
+tweets_clean_joined_emo <- read.csv("./data/clean/tweets_clean_joined_emo.csv")
+
+tweets_scatter <- tweets_clean_joined_emo %>%
+  drop_na() %>%
+  filter(retweet_count < 1000) 
+
+ggplot(data = tweets_scatter, aes(x = arousal, y = retweet_count, color = retweet_count)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method="lm", formula=y~I(x)+I(x^2), color = "red") +
+  xlab("Arousal") +
+  ylab("Retweet Count") +
+  ggtitle("Preliminary regression model") +
+  theme(legend.position = "none")
+  
+ggplot(data = tweets_scatter, aes(x = valence, y = retweet_count, color = retweet_count)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method="lm", formula=y~I(x)+I(x^2), color = "red") +
+  xlab("Valence") +
+  ylab("Retweet Count") +
+  ggtitle("Preliminary regression model") +
+  theme(legend.position = "none")
+
+ggplot(data = tweets_scatter, aes(x = dominance, y = retweet_count, color = retweet_count)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method="lm", formula=y~I(x)+I(x^2), color = "red") +
+  xlab("Dominance") +
+  ylab("Retweet Count") +
+  ggtitle("Preliminary regression model") +
+  theme(legend.position = "none")
+
+ggplot(data = tweets_scatter, aes(x = anger, y = retweet_count, color = retweet_count)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method="lm", formula=y~I(x)+I(x^2), color = "red") +
+  xlab("Anger") +
+  ylab("Retweet Count") +
+  ggtitle("Preliminary regression model") +
+  theme(legend.position = "none")
+
+ggplot(data = tweets_scatter, aes(x = fear, y = retweet_count, color = retweet_count)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method="lm", formula=y~I(x)+I(x^2), color = "red") +
+  xlab("Fear") +
+  ylab("Retweet Count") +
+  ggtitle("Preliminary regression model") +
+  theme(legend.position = "none")
+
+# Generally speaking, there seems to be a quadratic relationship between rt count and emotionality - i. e. the rt count reaches a certain maximum at roughly the median of the dataset and then declines again. Here a polynomial regression model might be adequate to predict rt count based on emotionality (p = valence, arousal, dominance, anger and fear).
+```
+
+# Histograms
+```{r}
+tweets_hist <- tweets_clean_joined_emo %>%
+  drop_na() %>%
+  mutate(across(party, factor, levels=c("BUENDNIS 90/DIE GRUENEN", "AfD", "GRUENE", "FPOE")))
+
+ggplot(data = tweets_hist, aes(x = arousal, fill = party)) +
+  geom_histogram(binwidth = 0.08, color = "white") +
+  facet_wrap(~party) +
+  geom_vline(aes(xintercept=mean(arousal)),
+            color="red",  size=0.8) +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  scale_fill_manual(values = c("darkgreen", "darkblue", "darkgreen", "darkblue")) +
+  ggtitle("Arousal per Party") +
+  xlab("Arousal") +
+  ylab("Count")
+
+ggplot(data = tweets_hist, aes(x = valence, fill = party)) +
+  geom_histogram(binwidth = 0.20, color = "white") +
+  facet_wrap(~party) +
+  geom_vline(aes(xintercept=mean(valence)),
+            color="red",  size=0.8) +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  scale_fill_manual(values = c("darkgreen", "darkblue", "darkgreen", "darkblue")) +
+  ggtitle("Valence per Party") +
+  xlab("Valence") +
+  ylab("Count")
+  
+ggplot(data = tweets_hist, aes(x = dominance, fill = party)) +
+  geom_histogram(binwidth = 0.10, color = "white") +
+  facet_wrap(~party) +
+  geom_vline(aes(xintercept=mean(dominance)),
+            color="red",  size=0.8) +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  scale_fill_manual(values = c("darkgreen", "darkblue", "darkgreen", "darkblue")) +
+  ggtitle("Dominance per Party") +
+  xlab("Dominance") +
+  ylab("Count")
+
+ggplot(data = tweets_hist, aes(x = anger, fill = party)) +
+  geom_histogram(binwidth = 0.20, color = "white") +
+  facet_wrap(~party) +
+  geom_vline(aes(xintercept=mean(anger)),
+            color="red",  size=0.8) +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  scale_fill_manual(values = c("darkgreen", "darkblue", "darkgreen", "darkblue")) +
+  ggtitle("Anger per Party") +
+  xlab("Anger") +
+  ylab("Count")
+  
+ggplot(data = tweets_hist, aes(x = fear, fill = party)) +
+  geom_histogram(binwidth = 0.10, color = "white") +
+  facet_wrap(~party) +
+  geom_vline(aes(xintercept=mean(fear)),
+            color="red",  size=0.8) +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  scale_fill_manual(values = c("darkgreen", "darkblue", "darkgreen", "darkblue")) +
+  ggtitle("Fear per Party") +
+  xlab("Fear") +
+  ylab("Count")
+```
+
+
+# Quanteda Analysis
+```{r}
+corp_tweet <- corpus(tweets_clean_joined_emo, text_field = "text_clean")
+
+corpus_DIEGRUENEN <- corp_tweet %>% 
+  corpus_subset(party == "BUENDNIS 90/DIE GRUENEN")
+
+corpus_GRUENE <- corp_tweet %>% 
+  corpus_subset(party == "GRUENE")
+
+corpus_AfD <- corp_tweet %>% 
+  corpus_subset(party == "AfD")
+
+corpus_FPOE <- corp_tweet %>% 
+  corpus_subset(party == "FPOE")
+
+get_dfm <- function(corpus){
+tok_tweet <- tokens(corpus)
+tok_clean <- tokens_remove(tok_tweet, pattern = stopwords("german"))
+stopwords_2 <- c("dass", "„", "–", "1/2", "¿", "*ï*", "ua", "nsche", "ch", "sterreich", "cke", "kologische", "mpfen", "nnen", "ssen", "rgern", "re", "ckwunsch", "rlich", "d", "ufeufea", "you", "and")
+tok_clean <- tokens_select(tok_clean, pattern = stopwords_2, selection = "remove")
+tweet_matrix <- dfm(tok_clean)
+return(tweet_matrix)
+}
+```
+
+## Wordclouds for each party
+```{r}
+set.seed(1234)
+DIEGRUENEN_dfm <- get_dfm(corpus_DIEGRUENEN)
+textplot_wordcloud(DIEGRUENEN_dfm, max_words = 300, min_size = 0.7, min_count = 5, color = "darkgreen")
+```
+
+
+```{r}
+set.seed(1234)
+corpus_GRUENE_dfm <- get_dfm(corpus_GRUENE)
+textplot_wordcloud(corpus_GRUENE_dfm, max_words = 300, min_size = 0.7, min_count = 5, color = "darkgreen")
+```
+
+
+```{r}
+set.seed(1234)
+AfD_dfm <- get_dfm(corpus_AfD)
+textplot_wordcloud(AfD_dfm, max_words = 300, min_size = 0.9, min_count = 5, color = "darkblue")
+```
+
+
+```{r}
+set.seed(1234)
+FPOE_dfm <- get_dfm(corpus_FPOE)
+textplot_wordcloud(FPOE_dfm, max_words = 300, min_size = 0.7, min_count = 5, color = "darkblue")
+```
+
+## Wordcloud comparison
+```{r}
+set.seed(1234)
+comp_tweets_1 <- tweets_clean_joined_emo %>%
+  filter(left_right == 1)
+
+comp_tweets_2 <- tweets_clean_joined_emo %>%
+  filter(left_right == 0)
+
+paste_right <- paste(comp_tweets_1$text_clean, collapse = " ")
+paste_left <- paste(comp_tweets_2$text_clean, collapse = " ")
+left_right <- c(0, 1)
+
+df_comp <- data.frame(text = character(0), left_right = numeric(0))
+df_comp <- rbind(df_comp, paste_right, paste_left)
+df_comp <- cbind(df_comp, left_right)
+colnames(df_comp) <- c("text", "left_right")
+rownames(df_comp) <- c( "right", "left")
+
+corp_comp <- corpus(df_comp, text_field = "text")
+
+comp_dfm <- get_dfm(corp_comp)
+
+textplot_wordcloud(dfm_trim(comp_dfm, dmin_count = 5, verbose = FALSE), max_words = 140, min_size = 1.2, min_count = 8, labelcolor = "black", rotation = 1,
+                   comparison = TRUE, color = c("darkblue", "darkgreen")) # for usage in presentation rotate 90°
+```
+
+# Descriptive Statistics
+```{r}
+tweets_emo_avg <-
+  tweets_clean_joined_emo %>%
+  group_by(party) %>%
+  summarize(mean_valence = mean(valence, na.rm = T),
+            mean_arousal = mean(arousal, na.rm = T),
+            mean_dominance = mean(dominance, na.rm = T),
+            median_valence = median(valence, na.rm = T),
+            median_arousal = median(arousal, na.rm = T),
+            median_dominance = median(dominance, na.rm = T),
+            sd_valence = sd(valence, na.rm = T),
+            sd_arousal = sd(arousal, na.rm = T),
+            sd_dominance = sd(dominance, na.rm = T))
+tweets_emo_avg
+
+tweets_emo_avg_1 <-
+  tweets_clean_joined_emo %>%
+  group_by(left_right) %>%
+  summarize(mean_valence = mean(valence, na.rm = T),
+            mean_arousal = mean(arousal, na.rm = T),
+            mean_dominance = mean(dominance, na.rm = T),
+            median_valence = median(valence, na.rm = T),
+            median_arousal = median(arousal, na.rm = T),
+            median_dominance = median(dominance, na.rm = T),
+            sd_valence = sd(valence, na.rm = T),
+            sd_arousal = sd(arousal, na.rm = T),
+            sd_dominance = sd(dominance, na.rm = T))
+tweets_emo_avg_1 #only confirming null hypothesis - no significant deviations between left and right or party
+```
+
+
+```{r}
+tweets_emo_avg_2 <-
+  tweets_clean_joined_emo %>%
+  group_by(party) %>%
+  summarize(mean_anger = mean(anger, na.rm = T),
+            mean_fear = mean(fear, na.rm = T),
+            median_fear = median(fear, na.rm = T),
+            median_anger = median(anger, na.rm = T),
+            sd_anger = sd(anger, na.rm = T),
+            sd_fear = sd(fear, na.rm = T))
+tweets_emo_avg_2
+
+tweets_emo_avg_3 <-
+  tweets_clean_joined_emo %>%
+  group_by(left_right) %>%
+  summarize(mean_anger = mean(anger, na.rm = T),
+            mean_fear = mean(fear, na.rm = T),
+            median_fear = median(fear, na.rm = T),
+            median_anger = median(anger, na.rm = T),
+            sd_anger = sd(anger, na.rm = T),
+            sd_fear = sd(fear, na.rm = T))
+tweets_emo_avg_3 # Also including the dimensions of fear and anger paint the same picture...
+```
+
+
+```{r}
+party_l = c("FPOE", "AfD", "GRUENE", "BUENDNIS 90/DIE GRUENEN")
+tweets_afd <- tweets_clean_joined_emo %>%
+  filter(party == "AfD")
+
+tweets_fpoe <- tweets_clean_joined_emo %>%
+  filter(party == "FPOE")
+
+tweets_groe <- tweets_clean_joined_emo %>%
+  filter(party == "GRUENE")
+
+tweets_grde <- tweets_clean_joined_emo %>%
+  filter(party == "BUENDNIS 90/DIE GRUENEN")
+```
+
+
+```{r}
+summary(tweets_afd)
+```
+
+
+```{r}
+summary(tweets_fpoe)
+```
+
+
+```{r}
+summary(tweets_grde)
+```
+
+
+```{r}
+summary(tweets_groe)
+```
+
+
+```{r}
+numeric_tweets <-tweets_emo_disc[, sapply(tweets_clean_joined_emo, is.numeric)]
+standard_tweets <- scale(numeric_tweets)
+standard_tweets_1 <- standard_tweets %>%
+  select(favorite_count, retweet_count, left_right, valence, arousal, dominance, anger, fear)
+```
+
+
+```{r}
+cor(standard_tweets,
+    use = "complete.obs", method = "spearman")
+```
+ 
+
+# Temporal Discretisation
+```{r}
+xy <- today()
+date_numeric <- function(date) {
+  date <- as.Date(date)
+span <- interval(ymd(date), ymd(xy))
+num <- as.duration(span)
+return(num)}
+date_numeric('2020-08-20')
+```
+
+
+```{r}
+tweets_emo_disc <- tweets_clean_joined_emo %>%
+  mutate(age = date_numeric(date)) #binning time series data for line plots
+```
+
+
+```{r}
+tweets_emo_bin <- tweets_emo_disc 
+tweets_emo_bin$date_disc <-
+discretize(tweets_emo_disc$age, method = "frequency", breaks = 20, include.lowest = TRUE)
+```
+
+
+```{r}
+length(unique(tweets_emo_bin$date_disc))
+```
+
+
+```{r}
+tweets_disc_afd <- tweets_emo_bin %>%
+  filter(party == "AfD") %>%
+  drop_na()
+
+tweets_disc_fpoe <- tweets_emo_bin %>%
+  filter(party == "FPOE")%>%
+  drop_na()
+
+tweets_disc_groe <- tweets_emo_bin %>%
+  filter(party == "GRUENE")%>%
+  drop_na()
+
+tweets_disc_grde <- tweets_emo_bin %>%
+  filter(party == "BUENDNIS 90/DIE GRUENEN")%>%
+  drop_na()
+```
+
+
+# Violin Plots for emotional distributions
+```{r}
+violinplot_afd_valence <- 
+  ggplot(tweets_disc_afd, aes(x = name, y = valence, fill = name, color = name )) +
+  geom_violin(color = NA, alpha = 1, trim=TRUE, size=20) +
+  
+  geom_boxplot(size =1, width=0.1) +
+   xlab("\n Politician ") +
+   ylab("\n Valence") +
+  theme_classic() +
+  theme(legend.position = "none", axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+violinplot_afd_dominance <- 
+  ggplot(tweets_disc_afd, aes(x = name, y = dominance, fill = name, color = name )) +
+  geom_violin(color = NA, alpha = 1, trim=TRUE, size=20) +
+  
+  geom_boxplot(size =1, width=0.1) +
+   xlab("\n Politician ") +
+   ylab("\n Dominance") +
+  theme_classic() +
+  theme(legend.position = "none", axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+  
+violinplot_afd_arousal <- 
+  ggplot(tweets_disc_afd, aes(x = name, y = arousal, fill = name, color = name )) +
+  geom_violin(color = NA, alpha = 1, trim=TRUE, size=20) +
+  
+  geom_boxplot(size =1, width=0.1) +
+   xlab("\n Politician ") +
+   ylab("\n Arousal") +
+  theme_classic() +
+  theme(legend.position = "none", axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+afd_comparison <- violinplot_afd_valence + violinplot_afd_dominance + violinplot_afd_arousal
+```
+
+
+```{r}
+violinplot_fpoe_valence <- 
+  ggplot(tweets_disc_fpoe, aes(x = name, y = valence, fill = name, color = name )) +
+  geom_violin(color = NA, alpha = 1, trim=TRUE, size=20) +
+  
+  geom_boxplot(size =1, width=0.1) +
+   xlab("\n Politician ") +
+   ylab("\n Valence") +
+  theme_classic() +
+  theme(legend.position = "none", axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+violinplot_fpoe_dominance <- 
+  ggplot(tweets_disc_fpoe, aes(x = name, y = dominance, fill = name, color = name )) +
+  geom_violin(color = NA, alpha = 1, trim=TRUE, size=20) +
+  
+  geom_boxplot(size =1, width=0.1) +
+   xlab("\n Politician ") +
+   ylab("\n Dominance") +
+  theme_classic() +
+  theme(legend.position = "none", axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+violinplot_fpoe_arousal <- 
+  ggplot(tweets_disc_fpoe, aes(x = name, y = arousal, fill = name, color = name )) +
+  geom_violin(color = NA, alpha = 1, trim=TRUE, size=20) +
+  
+  geom_boxplot(size =1, width=0.1) +
+   xlab("\n Politician ") +
+   ylab("\n Arousal") +
+  theme_classic() +
+  theme(legend.position = "none", axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+
+fpoe_comparison <- violinplot_fpoe_valence + violinplot_fpoe_dominance + violinplot_fpoe_arousal
+```
+
+
+```{r}
+violinplot_groe_valence <- 
+  ggplot(tweets_disc_groe, aes(x = name, y = valence, fill = name, color = name )) +
+  geom_violin(color = NA, alpha = 1, trim=TRUE, size=20) +
+  
+  geom_boxplot(size =1, width=0.1) +
+   xlab("\n Politician ") +
+   ylab("\n Valence") +
+  theme_classic() +
+  theme(legend.position = "none", axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+violinplot_groe_dominance <- 
+  ggplot(tweets_disc_groe, aes(x = name, y = dominance, fill = name, color = name )) +
+  geom_violin(color = NA, alpha = 1, trim=TRUE, size=20) +
+  
+  geom_boxplot(size =1, width=0.1) +
+   xlab("\n Politician ") +
+   ylab("\n Dominance") +
+  theme_classic() +
+  theme(legend.position = "none", axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+violinplot_groe_arousal <- 
+  ggplot(tweets_disc_groe, aes(x = name, y = arousal, fill = name, color = name )) +
+  geom_violin(color = NA, alpha = 1, trim=TRUE, size=20) +
+  
+  geom_boxplot(size =1, width=0.1) +
+   xlab("\n Politician ") +
+   ylab("\n Arousal") +
+  theme_classic() +
+  theme(legend.position = "none", axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+
+groe_comparison <- violinplot_groe_valence + violinplot_groe_dominance + violinplot_groe_arousal
+```
+
+
+```{r}
+violinplot_grde_valence <- 
+  ggplot(tweets_disc_grde, aes(x = name, y = valence, fill = name, color = name )) +
+  geom_violin(color = NA, alpha = 1, trim=TRUE, size=20) +
+  
+  geom_boxplot(size =1, width=0.1) +
+   xlab("\n Politician ") +
+   ylab("\n Valence") +
+  theme_classic() +
+  theme(legend.position = "none", axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+violinplot_grde_dominance <- 
+  ggplot(tweets_disc_grde, aes(x = name, y = dominance, fill = name, color = name )) +
+  geom_violin(color = NA, alpha = 1, trim=TRUE, size=20) +
+  
+  geom_boxplot(size =1, width=0.1) +
+   xlab("\n Politician ") +
+   ylab("\n Dominance") +
+  theme_classic() +
+  theme(legend.position = "none", axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+violinplot_grde_arousal <- 
+  ggplot(tweets_disc_grde, aes(x = name, y = arousal, fill = name, color = name )) +
+  geom_violin(color = NA, alpha = 1, trim=TRUE, size=20) +
+  
+  geom_boxplot(size =1, width=0.1) +
+   xlab("\n Politician ") +
+   ylab("\n Arousal") +
+  theme_classic() +
+  theme(legend.position = "none", axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+
+grde_comparison <- violinplot_grde_valence + violinplot_grde_dominance + violinplot_grde_arousal
+```
+
+
+```{r}
+grde_comparison
+groe_comparison
+afd_comparison
+fpoe_comparison
+```
+
+
+# Lineplots over time
+```{r}
+lineplot_valence_grde <-
+  ggplot(tweets_disc_grde, aes(x=age, y=valence)) +
+  geom_line(aes(color = name), size = 1) +
+  xlab("\n over time") +
+  ylab("Valence \n") +
+  ggtitle("Valence over time in DIE GRUENEN") +
+  scale_color_brewer(type = "div", palette = "Set3") +
+  theme_minimal()
+
+lineplot_dominance_grde <-
+  ggplot(tweets_disc_grde, aes(x=age, y=dominance)) +
+  geom_line(aes(color = name), size = 1) +
+  xlab("\n over time") +
+  ylab("Valence \n") +
+  ggtitle("Dominance over time in DIE GRUENEN") +
+  scale_color_brewer(type = "div", palette = "Set3") +
+  theme_minimal()
+
+lineplot_arousal_grde <-
+  ggplot(tweets_disc_grde, aes(x=age, y=arousal)) +
+  geom_line(aes(color = name), size = 1) +
+  xlab("\n over time") +
+  ylab("Valence \n") +
+  ggtitle("Arousal over time in DIE GRUENEN") +
+  scale_color_brewer(type = "div", palette = "Set3") +
+  theme_minimal()
+```
+
+
+```{r}
+lineplot_valence_groe <-
+  ggplot(tweets_disc_groe, aes(x=age, y=valence)) +
+  geom_line(aes(color = name), size = 1) +
+  xlab("\n over time") +
+  ylab("Valence \n") +
+  ggtitle("Valence over time in GRUENE") +
+  scale_color_brewer(type = "div", palette = "Set3") +
+  theme_minimal()
+
+lineplot_dominance_groe <-
+  ggplot(tweets_disc_groe, aes(x=age, y=dominance)) +
+  geom_line(aes(color = name), size = 1) +
+  xlab("\n over time") +
+  ylab("Valence \n") +
+  ggtitle("Dominance over time in GRUENE") +
+  scale_color_brewer(type = "div", palette = "Set3") +
+  theme_minimal()
+
+lineplot_arousal_groe <-
+  ggplot(tweets_disc_groe, aes(x=age, y=arousal)) +
+  geom_line(aes(color = name), size = 1) +
+  xlab("\n over time") +
+  ylab("Valence \n") +
+  ggtitle("Arousal over time in GRUENE") +
+  scale_color_brewer(type = "div", palette = "Set3") +
+  theme_minimal()
+```
+
+
+```{r}
+lineplot_valence_fpoe <-
+  ggplot(tweets_disc_fpoe, aes(x=age, y=valence)) +
+  geom_line(aes(color = name), size = 1) +
+  xlab("\n over time") +
+  ylab("Valence \n") +
+  ggtitle("Valence over time in FPOE") +
+  scale_color_brewer(type = "div", palette = "Set3") +
+  theme_minimal()
+
+lineplot_dominance_fpoe <-
+  ggplot(tweets_disc_fpoe, aes(x=age, y=dominance)) +
+  geom_line(aes(color = name), size = 1) +
+  xlab("\n over time") +
+  ylab("Valence \n") +
+  ggtitle("Dominance over time in FPOE") +
+  scale_color_brewer(type = "div", palette = "Set3") +
+  theme_minimal()
+
+lineplot_arousal_fpoe <-
+  ggplot(tweets_disc_fpoe, aes(x=age, y=arousal)) +
+  geom_line(aes(color = name), size = 1) +
+  xlab("\n over time") +
+  ylab("Valence \n") +
+  ggtitle("Arousal over time in FPOE") +
+  scale_color_brewer(type = "div", palette = "Set3") +
+  theme_minimal()
+```
+
+
+```{r}
+lineplot_valence_afd <-
+  ggplot(tweets_disc_afd, aes(x=age, y=valence)) +
+  geom_line(aes(color = name), size = 1, alpha = 0.4) +
+  xlab("\n over time") +
+  ylab("Valence \n") +
+  ggtitle("Valence over time in AFD") +
+  scale_color_brewer(type = "div", palette = "Set1") +
+  theme_minimal()
+
+lineplot_dominance_afd <-
+  ggplot(tweets_disc_afd, aes(x=age, y=dominance)) +
+  geom_line(aes(color = name), size = 1) +
+  xlab("\n over time") +
+  ylab("Valence \n") +
+  ggtitle("Dominance over time in AFD") +
+  scale_color_brewer(type = "div", palette = "Set3") +
+  theme_minimal()
+
+lineplot_arousal_afd <-
+  ggplot(tweets_disc_afd, aes(x=age, y=arousal)) +
+  geom_line(aes(color = name), size = 1) +
+  xlab("\n over time") +
+  ylab("Valence \n") +
+  ggtitle("Arousal over time in AFD") +
+  scale_color_brewer(type = "div", palette = "Set3") +
+  theme_minimal()
+```
+
+
+```{r}
+emo_lineplot_aut <- tweets_emo_bin %>%
+  drop_na() %>%
+  filter(country == "Austria")
+
+ggplot(emo_lineplot_aut, aes(x=age, y=arousal)) +
+  geom_line(aes(color = party), size = 1.2, alpha = 0.4) +
+  xlab("\n over time") +
+  ylab("Arousal \n") +
+  ggtitle("Arousal over time") +
+  scale_color_manual(values = c("darkblue", "darkgreen")) +
+  theme_minimal() +
+  theme(axis.text.x=element_blank())
+
+emo_lineplot_de <- tweets_emo_bin %>%
+  drop_na() %>%
+  filter(country == "Germany")
+
+ggplot(emo_lineplot_de, aes(x=age, y=arousal)) +
+  geom_line(aes(color = party), size = 1.2, alpha = 0.4) +
+  xlab("\n over time") +
+  ylab("Arousal \n") +
+  ggtitle("Arousal over time") +
+  scale_color_manual(values = c("darkblue", "darkgreen")) +
+  theme_minimal() +
+  theme(axis.text.x=element_blank())
+```
+
+
+```{r}
+lineplot_valence_afd
+lineplot_valence_fpoe
+lineplot_valence_groe
+lineplot_valence_grde
+lineplot_dominance_fpoe
+lineplot_dominance_afd
+lineplot_dominance_groe
+lineplot_dominance_grde
+lineplot_arousal_afd
+lineplot_arousal_fpoe
+lineplot_arousal_groe
+lineplot_arousal_grde
+```
+
+
+# T-tests
+```{r}
+tweets_right <- tweets_emo_bin %>%
+  filter(left_right == "1")
+
+tweets_left <- tweets_emo_bin %>%
+  filter(left_right == "0")
+```
+
+
+## Germany - Valence
+```{r}
+t.test(tweets_disc_afd$valence, tweets_disc_grde$valence, var.equal = FALSE, alternative = "greater", conf.level = 0.95)
+```
+
+
+## Germany - Dominance
+```{r}
+t.test(tweets_disc_afd$dominance, tweets_disc_grde$dominance, var.equal = FALSE, alternative = "greater", conf.level = 0.95)
+```
+
+
+## Germany - Arousal
+```{r}
+t.test(tweets_disc_afd$arousal, tweets_disc_grde$arousal, var.equal = FALSE, alternative = "greater", conf.level = 0.95)
+```
+
+
+## Germany - Anger
+```{r}
+t.test(tweets_disc_afd$anger, tweets_disc_grde$anger, var.equal = FALSE, alternative = "greater", conf.level = 0.95)
+```
+
+
+## Germany - Fear
+```{r}
+t.test(tweets_disc_afd$fear, tweets_disc_grde$fear, var.equal = FALSE, alternative = "greater", conf.level = 0.95)
+```
+
+
+## Austria - Valence
+```{r}
+t.test(tweets_disc_fpoe$valence, tweets_disc_groe$valence, var.equal = FALSE, alternative = "greater", conf.level = 0.95)
+```
+
+
+## Austria - Dominance
+```{r}
+t.test(tweets_disc_fpoe$dominance, tweets_disc_groe$dominance, var.equal = FALSE, alternative = "greater", conf.level = 0.95)
+```
+
+
+## Austria - Arousal
+```{r}
+t.test(tweets_disc_fpoe$arousal, tweets_disc_groe$arousal, var.equal = FALSE, alternative = "greater", conf.level = 0.95)
+```
+
+
+## Austria - Anger
+```{r}
+t.test(tweets_disc_fpoe$anger, tweets_disc_groe$anger, var.equal = FALSE, alternative = "greater", conf.level = 0.95)
+```
+
+
+## Austria - Fear
+```{r}
+t.test(tweets_disc_fpoe$fear, tweets_disc_groe$fear, var.equal = FALSE, alternative = "greater", conf.level = 0.95)
+```
+
+
+## Left/Right - Valence
+```{r}
+t.test(tweets_right$valence, tweets_left$valence, var.equal = FALSE, alternative = "greater", conf.level = 0.95)
+```
+
+
+## Left/Right - Dominance
+```{r}
+t.test(tweets_right$dominance, tweets_left$dominance, var.equal = FALSE, alternative = "greater", conf.level = 0.95)
+```
+
+
+## Left/Right - Arousal
+```{r}
+t.test(tweets_right$arousal, tweets_left$arousal, var.equal = FALSE, alternative = "greater", conf.level = 0.95)
+```
+
+
+## Left/Right - Anger
+```{r}
+t.test(tweets_right$anger, tweets_left$anger, var.equal = FALSE, alternative = "greater", conf.level = 0.95)
+```
+
+
+## Left/Right - Fear
+```{r}
+t.test(tweets_right$fear, tweets_left$fear, var.equal = FALSE, alternative = "greater", conf.level = 0.95)
+```
+
+# Regression model
+```{r}
+set.seed(19)
+
+sample <- sample.int(n = nrow(tweets_scatter), size = floor(.70*nrow(tweets_scatter)), replace = FALSE)
+train <- tweets_scatter[sample, ]
+test  <- tweets_scatter[-sample, ]
+
+model <- lm(retweet_count ~ poly(valence, 2, raw = TRUE) + poly(arousal, 2, raw = TRUE) + poly(dominance, 2, raw = TRUE) + poly(fear, 2, raw = TRUE) + poly(anger, 2, raw = TRUE), data = train)
+
+
+predictions <- model %>% predict(test)
+modelPerfomance = data.frame(
+   RMSE = RMSE(predictions, test$retweet_count),
+    R2 = R2(predictions, test$retweet_count)
+)
+print(model)
+print(modelPerfomance)
+
+# using splines for improving fitting accuracy
+
+model_gam <- gam(retweet_count ~ s(valence) + s(arousal) + s(dominance) + s(fear) + s(anger), data = train)
+
+predictions_gam <- model_gam %>% predict(test)
+modelPerfomance_gam = data.frame(
+   RMSE = RMSE(predictions_gam, test$retweet_count),
+    R2 = R2(predictions_gam, test$retweet_count)
+)
+print(modelPerfomance_gam)
+# as you can see from the performance table, the model's accuracy is really low and thus the regression model does not seem to be a good fit for explaining the correlation between retweet count and the emotion attributes
+```
